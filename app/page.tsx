@@ -27,6 +27,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { Button } from "@/components/ui/button";
 
 export default function Home() {
   const input = useRef<HTMLInputElement>(null);
@@ -47,6 +48,7 @@ export default function Home() {
     { name: string; type: string; value: string }[]
   >([]);
   const [exporting, setExporting] = useState(false);
+  const [textRuns, setTextRuns] = useState<{ id: number; text: string; original: string; x: number; y: number; width: number; height: number; size: number }[]>([]);
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(e.target.files?.[0] ?? null);
     setPageNumber(1);
@@ -146,6 +148,14 @@ export default function Home() {
           }),
         );
       }
+      if (textRuns.length) {
+        const font = await pdf.embedFont(StandardFonts.Helvetica);
+        const page = pdf.getPages()[pageNumber - 1];
+        textRuns.filter((run) => run.text !== run.original).forEach((run) => {
+          page.drawRectangle({ x: run.x / (1.25 * zoom), y: page.getHeight() - (run.y + run.height) / (1.25 * zoom), width: Math.max(run.width / (1.25 * zoom), 24), height: run.height / (1.25 * zoom) + 4, color: rgb(1, 1, 1) });
+          page.drawText(run.text, { x: run.x / (1.25 * zoom), y: page.getHeight() - (run.y + run.height) / (1.25 * zoom), size: run.size / (1.25 * zoom), font, color: rgb(0.09, 0.1, 0.11) });
+        });
+      }
       const bytes = await pdf.save();
       const safeBytes = new Uint8Array(bytes).buffer as ArrayBuffer;
       const url = URL.createObjectURL(
@@ -164,7 +174,9 @@ export default function Home() {
   };
   const addText = (e: React.MouseEvent<HTMLDivElement>) => {
     if (tool !== "text") return;
-    const rect = e.currentTarget.getBoundingClientRect();
+    const pageElement = e.currentTarget.querySelector<HTMLElement>(".rendered-page");
+    if (!pageElement || !pageElement.contains(e.target as Node)) return;
+    const rect = pageElement.getBoundingClientRect();
     setNotes((items) => [
       ...items,
       {
@@ -175,6 +187,8 @@ export default function Home() {
       },
     ]);
   };
+  const updateNote = (id: number, text: string) =>
+    setNotes((items) => items.map((note) => (note.id === id ? { ...note, text } : note)));
   useEffect(() => {
     if (!file || !canvasRef.current) return;
     let cancelled = false;
@@ -202,6 +216,13 @@ export default function Home() {
         canvas.height = viewport.height;
         await page.render({ canvasContext: canvas.getContext("2d")!, viewport })
           .promise;
+        const content = await page.getTextContent();
+        const scale = 1.25 * zoom;
+        const runs = content.items.filter((item): item is typeof item & { str: string; transform: number[]; width: number } => "str" in item && "transform" in item).map((item, index) => {
+          const size = Math.max(Math.abs(item.transform[0]) * scale, 8);
+          return { id: index, text: item.str, original: item.str, x: item.transform[4] * scale, y: viewport.height - item.transform[5] * scale - size, width: item.width * scale, height: size + 4, size };
+        }).filter((item) => item.text.trim());
+        if (!cancelled) setTextRuns(runs);
         if (!cancelled) setLoading(false);
       })
       .catch(() => {
@@ -214,6 +235,7 @@ export default function Home() {
       cancelled = true;
     };
   }, [file, pageNumber, zoom]);
+  const updateTextRun = (id: number, text: string) => setTextRuns((items) => items.map((item) => item.id === id ? { ...item, text } : item));
   const tools = [
     ["select", MousePointer2],
     ["text", Type],
@@ -229,18 +251,18 @@ export default function Home() {
           <span className="brand-mark">P</span> paper
         </div>
         <div className="top-actions">
-          <button className="btn">
+          <Button variant="outline" size="icon" aria-label="Undo">
             <Undo2 size={15} />
-          </button>
-          <button className="btn">
+          </Button>
+          <Button variant="outline" size="icon" aria-label="Redo">
             <Redo2 size={15} />
-          </button>
-          <button className="btn" onClick={() => input.current?.click()}>
+          </Button>
+          <Button variant="outline" onClick={() => input.current?.click()}>
             <Upload size={14} /> Import PDF
-          </button>
-          <button className="btn dark" onClick={download}>
+          </Button>
+          <Button onClick={download}>
             <Download size={14} /> {exporting ? "Exporting…" : "Export"}
-          </button>
+          </Button>
           <input
             ref={input}
             type="file"
@@ -371,13 +393,18 @@ export default function Home() {
                 ) : (
                   <>
                     <canvas ref={canvasRef} className="pdf-canvas" />
+                    {textRuns.map((run) => (
+                      <input key={run.id} className="text-run" value={run.text} style={{ left: run.x, top: run.y, width: Math.max(run.width, 24), height: run.height, fontSize: run.size }} onChange={(e) => updateTextRun(run.id, e.target.value)} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} />
+                    ))}
                     {notes.map((note) => (
                       <input
                         key={note.id}
                         className="text-note"
-                        defaultValue={note.text}
+                        value={note.text}
                         style={{ left: note.x, top: note.y }}
+                        onChange={(e) => updateNote(note.id, e.target.value)}
                         onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
                       />
                     ))}
                   </>
@@ -393,13 +420,12 @@ export default function Home() {
                 </div>
                 Bring your document into focus.
                 <br />
-                <button
-                  className="btn blue"
+                <Button
                   style={{ marginTop: 14 }}
                   onClick={() => input.current?.click()}
                 >
                   Choose PDF
-                </button>
+                </Button>
               </div>
             )}
           </div>
